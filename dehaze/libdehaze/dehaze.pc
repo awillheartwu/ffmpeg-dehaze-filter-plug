@@ -1,0 +1,11 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: dehaze
+Description: dehaze library
+Version: 0.2
+Libs: -L${exec_prefix}/lib -ldehaze -lopencv_core -lopencv_highgui -lopencv_imgproc -lm
+Libs.private: 
+Cflags: -I${prefix}/include

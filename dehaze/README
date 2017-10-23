@@ -1,0 +1,8 @@
+1. ffmpeg compile configuration line:
+   ./configure --enable-libx264 --enable-gpl --enable-avfilter --enable-filter=dehaze --enable-libdehaze
+
+2. run time link libdehaze:
+   put file 'libdehaze-x86_64.conf' to '/etc/ld.so.conf.d' folder
+
+3. ffmpeg dehaze test:
+   ./ffmpeg -i ~/2-wumai.mp4 -vf "dehaze" -y wumai-test.mp4

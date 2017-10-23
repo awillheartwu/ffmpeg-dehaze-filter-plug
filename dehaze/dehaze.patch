@@ -1,0 +1,155 @@
+diff --git a/configure b/configure
+index a61fdb4..2de20a0 100755
+--- a/configure
++++ b/configure
+@@ -209,7 +209,6 @@ External library support:
+   --disable-coreimage      disable Apple CoreImage framework [autodetect]
+   --enable-chromaprint     enable audio fingerprinting with chromaprint [no]
+   --enable-frei0r          enable frei0r video filtering [no]
+-  --enable-libdehaze       enable dehaze video filtering [no]
+   --enable-gcrypt          enable gcrypt, needed for rtmp(t)e support
+                            if openssl, librtmp or gmp is not used [no]
+   --enable-gmp             enable gmp, needed for rtmp(t)e support
+@@ -1526,7 +1525,7 @@ EXTERNAL_AUTODETECT_LIBRARY_LIST="
+ 
+ EXTERNAL_LIBRARY_GPL_LIST="
+     avisynth
+-    frei0r    
++    frei0r
+     libcdio
+     librubberband
+     libvidstab
+@@ -1611,7 +1610,6 @@ EXTERNAL_LIBRARY_LIST="
+     libzimg
+     libzmq
+     libzvbi
+-    libdehaze
+     mediacodec
+     openal
+     opencl
+@@ -3147,7 +3145,6 @@ coreimagesrc_filter_extralibs="-framework OpenGL"
+ cover_rect_filter_deps="avcodec avformat gpl"
+ cropdetect_filter_deps="gpl"
+ deinterlace_qsv_filter_deps="libmfx"
+-dehaze_filter_deps="libdehaze"
+ deinterlace_vaapi_filter_deps="vaapi"
+ delogo_filter_deps="gpl"
+ deshake_filter_select="pixelutils"
+@@ -6002,8 +5999,6 @@ enabled libx264           && { use_pkg_config x264 "stdint.h x264.h" x264_encode
+ enabled libx265           && require_pkg_config x265 x265.h x265_api_get &&
+                              { check_cpp_condition x265.h "X265_BUILD >= 68" ||
+                                die "ERROR: libx265 version must be >= 68."; }
+-enabled libdehaze         && require_pkg_config dehaze c_dehaze.h doDehaze
+-
+ enabled libxavs           && require libxavs "stdint.h xavs.h" xavs_encoder_encode -lxavs
+ enabled libxvid           && require libxvid xvid.h xvid_global -lxvidcore
+ enabled libzimg           && require_pkg_config "zimg >= 2.3.0" zimg.h zimg_get_api_version
+diff --git a/libavfilter/Makefile b/libavfilter/Makefile
+index 105fdc9..8aa974e 100644
+--- a/libavfilter/Makefile
++++ b/libavfilter/Makefile
+@@ -163,7 +163,6 @@ OBJS-$(CONFIG_DEBAND_FILTER)                 += vf_deband.o
+ OBJS-$(CONFIG_DECIMATE_FILTER)               += vf_decimate.o
+ OBJS-$(CONFIG_DEFLATE_FILTER)                += vf_neighbor.o
+ OBJS-$(CONFIG_DEFLICKER_FILTER)              += vf_deflicker.o
+-OBJS-$(CONFIG_DEHAZE_FILTER)                 += vf_dehaze.o
+ OBJS-$(CONFIG_DEINTERLACE_QSV_FILTER)        += vf_deinterlace_qsv.o
+ OBJS-$(CONFIG_DEINTERLACE_VAAPI_FILTER)      += vf_deinterlace_vaapi.o
+ OBJS-$(CONFIG_DEJUDDER_FILTER)               += vf_dejudder.o
+diff --git a/libavfilter/allfilters.c b/libavfilter/allfilters.c
+index 015d801..63e8672 100644
+--- a/libavfilter/allfilters.c
++++ b/libavfilter/allfilters.c
+@@ -175,7 +175,6 @@ static void register_all(void)
+     REGISTER_FILTER(DECIMATE,       decimate,       vf);
+     REGISTER_FILTER(DEFLATE,        deflate,        vf);
+     REGISTER_FILTER(DEFLICKER,      deflicker,      vf);
+-    REGISTER_FILTER(DEHAZE,         dehaze,         vf);
+     REGISTER_FILTER(DEINTERLACE_QSV,deinterlace_qsv,vf);
+     REGISTER_FILTER(DEINTERLACE_VAAPI, deinterlace_vaapi, vf);
+     REGISTER_FILTER(DEJUDDER,       dejudder,       vf);
+diff --git a/libavfilter/vf_dehaze.c b/libavfilter/vf_dehaze.c
+deleted file mode 100644
+index 06a6844..0000000
+--- a/libavfilter/vf_dehaze.c
++++ /dev/null
+@@ -1,79 +0,0 @@
+-#include "libavutil/colorspace.h"
+-#include "libavutil/common.h"
+-#include "libavutil/opt.h"
+-#include "libavutil/eval.h"
+-#include "libavutil/pixdesc.h"
+-#include "libavutil/parseutils.h"
+-#include "avfilter.h"
+-#include "formats.h"
+-#include "internal.h"
+-#include "video.h"
+-
+-#include "c_dehaze.h" // dehaze lib header
+-
+-typedef struct DehazeContext {
+-    // empty is ok, for dehaze doesn't expect parameters
+-    // if params are required, put them here and assign different values via AVOption
+-    int windowSize;    
+-    int fogReserverCoeff;    
+-} DehazeContext;
+-
+-static int query_formats(AVFilterContext *ctx)//formats supports支持的格式
+-{
+-    static const enum AVPixelFormat pix_fmts[] = {
+-        AV_PIX_FMT_YUV420P, // 目前就添加yuv420一种
+-        AV_PIX_FMT_NONE
+-    };
+-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
+-    if (!fmts_list)
+-        return AVERROR(ENOMEM);
+-    return ff_set_common_formats(ctx, fmts_list);
+-}
+-
+-static int dehaze_filter_frame(AVFilterLink *inlink, AVFrame *frame)
+-{
+-    AVFilterContext *ctx = inlink->dst;
+-    // extern "C" int doDehaze(uint8_t *pData[3], const int width, const int height); 
+-    if (doDehaze(frame->data, frame->linesize[0], frame->height) < 0)
+-    {
+-        av_log(ctx, AV_LOG_ERROR, "doDehaze fail.\n");
+-        return -1;
+-    }
+-    return ff_filter_frame(inlink->dst->outputs[0], frame);;
+-}
+-
+-#define OFFSET(x) offsetof(DehazeContext, x)
+-#define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
+-
+-static const AVOption dehaze_options[] = {{ NULL }};
+-
+-AVFILTER_DEFINE_CLASS(dehaze);
+-
+-static const AVFilterPad dehaze_inputs[] = {
+-    {
+-        .name           = "default",
+-        .type           = AVMEDIA_TYPE_VIDEO,
+-        .filter_frame   = dehaze_filter_frame,
+-    },
+-    { NULL }
+-};
+-
+-static const AVFilterPad dehaze_outputs[] = {
+-    {
+-        .name = "default",
+-        .type = AVMEDIA_TYPE_VIDEO,
+-    },
+-    { NULL }
+-};
+-
+-AVFilter ff_vf_dehaze = {
+-    .name          = "dehaze",
+-    .description   = NULL_IF_CONFIG_SMALL("single image dehaze using dark channel prior"),
+-    .priv_size     = sizeof(DehazeContext),
+-    .priv_class    = &dehaze_class,
+-    .init          = NULL, // doesn't need 'init/uninit' funcs
+-    .uninit        = NULL,
+-    .query_formats = query_formats,
+-    .inputs        = dehaze_inputs,
+-    .outputs       = dehaze_outputs,
+-};
